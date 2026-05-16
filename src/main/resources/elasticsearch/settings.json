@@ -1,0 +1,25 @@
+{
+  "analysis": {
+    "analyzer": {
+      "custom_turkish": {
+        "type": "custom",
+        "tokenizer": "standard",
+        "filter": ["lowercase", "turkish_stop", "turkish_stemmer", "asciifolding"]
+      }
+    },
+    "filter": {
+      "turkish_stop": {
+        "type": "stop",
+        "stopwords": "_turkish_"
+      },
+      "turkish_stemmer": {
+        "type": "stemmer",
+        "language": "turkish"
+      }
+    }
+  },
+  "index": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  }
+}
