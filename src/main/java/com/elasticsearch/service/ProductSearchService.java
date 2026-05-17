@@ -55,26 +55,50 @@ public class ProductSearchService {
         return repository.fullTextSearch(query);
     }
 
-    // Bool query — must + filter + should
+    /**
+     * Bool Query — Elasticsearch'in en güçlü query tipi.
+     *
+     * Bool query 4 clause'dan oluşur:
+     *   must   → zorunlu + skora katkı (AND + relevance)
+     *   filter → zorunlu + skora katkı yok + cache'lenir (AND, hız için)
+     *   should → tercihli + skora katkı (OR, boost)
+     *   must_not → olmamalı (NOT, skora katkı yok)
+     *
+     * Performans kuralı:
+     *   - Arama metni (relevance önemli) → must
+     *   - Kesin koşullar (kategori, fiyat) → filter (cache edilir, 10x hızlı)
+     *   - İsteğe bağlı boost (tag eşleşmesi) → should
+     */
     public List<Product> advancedSearch(String text, String category,
                                          BigDecimal minPrice, BigDecimal maxPrice,
                                          Double minRating, List<String> tags) {
         NativeQuery nativeQuery = NativeQuery.builder()
                 .withQuery(q -> q
                         .bool(b -> {
-                            // must — relevance scoring
+                            // MUST — zorunlu + relevance skoru hesaplanır
+                            // multi_match: aynı metni birden fazla alanda ara
+                            //   "name^3": name alanındaki eşleşme 3x daha önemli (boost)
+                            //   fuzziness="AUTO": 1-2 karakter yazım hatası tolere edilir
                             if (text != null) {
                                 b.must(m -> m.multiMatch(mm -> mm
                                         .query(text)
                                         .fields("name^3", "description", "tags")
-                                        .fuzziness("AUTO")));
+                                        .fuzziness("AUTO")));  // "labtop" → "laptop"
                             }
-                            // filter — no scoring, cached
+
+                            // FILTER — zorunlu ama skor etkilenmez, ES cache'ler
+                            // term query: keyword tipi alanlar için exact match (tokenize edilmez)
                             b.filter(f -> f.term(t -> t.field("active").value(true)));
+
                             if (category != null) {
+                                // "category" keyword tipi → tam değer eşleşmesi
                                 b.filter(f -> f.term(t -> t.field("category").value(category)));
                             }
+
                             if (minPrice != null || maxPrice != null) {
+                                // range query: sayısal alan için aralık filtresi
+                                //   gte = >= (greater than or equal)
+                                //   lte = <= (less than or equal)
                                 b.filter(f -> f.range(r -> {
                                     r.field("price");
                                     if (minPrice != null) r.gte(co.elastic.clients.json.JsonData.of(minPrice));
@@ -82,11 +106,14 @@ public class ProductSearchService {
                                     return r;
                                 }));
                             }
+
                             if (minRating != null) {
                                 b.filter(f -> f.range(r -> r.field("avgRating")
                                         .gte(co.elastic.clients.json.JsonData.of(minRating))));
                             }
-                            // should — boost matching tags
+
+                            // SHOULD — isteğe bağlı, eşleşince skor artar (boost)
+                            // tags eşleşirse ürün daha üste çıkar ama zorunlu değil
                             if (tags != null) {
                                 for (String tag : tags) {
                                     b.should(s -> s.term(t -> t.field("tags").value(tag)));
@@ -94,6 +121,7 @@ public class ProductSearchService {
                             }
                             return b;
                         }))
+                // Alaka düzeyine (relevance score) göre sırala — en alakalı başa
                 .withSort(s -> s.score(sc -> sc.order(SortOrder.Desc)))
                 .withPageable(PageRequest.of(0, 20))
                 .build();
