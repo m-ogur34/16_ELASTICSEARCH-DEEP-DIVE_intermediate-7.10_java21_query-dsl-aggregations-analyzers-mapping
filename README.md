@@ -240,23 +240,23 @@ Shard sayısı belirleme: hedef index boyutu / 50GB (kural değil, kılavuz)
 
 ## Mülakat Soruları
 
-**Q: `text` vs `keyword` farkı?**
-A: `text` tokenize edilir, analyzed, full-text arama için. `keyword` tokenize edilmez, exact match + sort + aggregation için.
+**Q: `text` vs `keyword` alan tipi farkı nedir?**
+A: `text`: Analyzer ile tokenize edilir — "Spring Boot" → ["spring", "boot"]. Full-text search için: `match`, `multi_match`, `query_string`. Sıralama ve aggregation yapılamaz (tokenize edildiği için). `keyword`: Tokenize edilmez, tam değer saklanır. Exact match (`term`), sıralama (`sort`), aggregation (`terms agg`) için. Örnek: `status`, `category`, `email` → keyword; `description`, `title` → text. Multi-field mapping: Aynı alana her iki tip — `name.keyword` sort için, `name` search için. Yanlış tip → sorgu çalışmaz (text alanına term query sonuç vermez).
 
-**Q: `must` vs `filter` farkı?**
-A: `must` relevance skoruna katkı sağlar. `filter` evet/hayır — skora katkısı yok ama cache'lenir, daha hızlı.
+**Q: `must`, `should`, `filter`, `must_not` farkları nelerdir?**
+A: `must`: Koşul sağlanmalı + relevance skoruna katkı sağlar — "en alakalı sonuç" için. `filter`: Koşul sağlanmalı ama skora katkı yok — cache'lenir, daha hızlı. Filtreleme için (tarih aralığı, status). `should`: En az biri sağlanmalı (OR) — skor artar. `minimum_should_match` ile kaç tane zorunlu belirlenebilir. `must_not`: Koşul sağlanmamalı, skora katkı yok. Performans: Filterleri `filter` context'e koy — ES bitset cache'ler. Örnek: kategori filtresi → `filter`, arama metni → `must`.
 
-**Q: Nested vs Object farkı?**
-A: `object` flattened — ayrı arama yapılamaz. `nested` bağımsız aranabilir. Örnek: `reviews.rating >= 4 AND reviews.userId = "user1"` nested olmadan yanlış sonuç döner.
+**Q: Nested vs Object farkı? Ne zaman nested kullanılır?**
+A: `object` (default): Elasticsearch array'deki nesneleri flatten'lar — `[{userId:"u1", rating:5}, {userId:"u2", rating:2}]` → `userId: ["u1","u2"], rating: [5,2]`. `reviews.rating >= 4 AND reviews.userId = "u1"` sorgusu yanlış sonuç döner (çapraz eşleşme). `nested`: Her dizi elemanı bağımsız belge olarak indexlenir, aralarındaki ilişki korunur. Doğru sorgu: `nested query` ile `reviews.rating >= 4 AND reviews.userId = "u1"` → yalnızca aynı review'da her iki koşul sağlananlar. Maliyet: Her `nested` update → tüm nested document'lar yeniden index'lenir. Yüksek güncelleme sıklığında dikkat.
 
-**Q: Shard sayısını neden sonradan değiştiremezsiniz?**
-A: Document routing `hash(id) % number_of_shards` formülüne dayanır. Shard sayısı değişirse document'lar yanlış shardda kalır — reindex zorunlu.
+**Q: Shard ve Replica nedir? Shard sayısı neden değiştirilemez?**
+A: Shard: Index'in bölümleri — her shard ayrı Lucene index. Yatay ölçekleme sağlar (10M doc → 5 shard × 2M doc). Replica: Shard kopyası — okuma throughput + availability. Primary shard düşerse replica promote edilir. Shard sayısı değiştirilemez: Document routing = `hash(id) % number_of_shards`. Değiştirilirse mevcut document'lar yanlış shardda kalır, bulunamaz. Çözüm: Yeni index oluştur (doğru shard sayısıyla) → `_reindex` API ile veriyi taşı → alias switch. Kural: Baştan doğru tahmin et; hot-warm architecture için daha az, büyük cluster için 3-5 shard/index.
 
-**Q: Fuzzy search nedir?**
-A: Edit distance (Levenshtein) ile benzer kelimeleri eşleştirir. `fuzziness=AUTO`: 1-2 karakter farkı tolere eder.
+**Q: Fuzzy search ve full-text search nasıl çalışır?**
+A: Full-text search: Analyzer pipeline — `char_filter` (HTML strip) → `tokenizer` (kelimeye böl) → `token_filter` (lowercase, stop words, stemming). "Running shoes" → ["run", "shoe"]. `match` query aynı pipeline'dan geçirir → token bazlı arama. Fuzzy search: `fuzziness: "AUTO"` — kısa kelimelerde (1-2 char) 0 edit distance, uzun kelimelerde 1-2 Levenshtein edit toleransı. "labtop" → "laptop" (1 char farkı). Performans: Fuzzy pahalı, prefix/wildcard sorgular çok pahalı (leading wildcard = full scan). Önerilen: `edge_ngram` analyzer ile prefix search, `search_as_you_type` tipi ile autocomplete.
 
-**Q: Alias neden kullanılır?**
-A: Zero-downtime reindex için. Uygulama alias'a yazar/okur. Yeni index hazır olunca alias switch edilir, uygulama değişmez.
+**Q: Alias neden kullanılır? Zero-downtime reindex nasıl yapılır?**
+A: Problem: Mapping değişikliği (yeni alan tipi) reindex gerektirir — yüzlerce GB'lık index'i yeniden oluştururken uygulama çalışmalı. Alias çözümü: (1) Uygulama `products` alias'ına yazar/okur. (2) `products` → `products_v1`'i gösterir. (3) `products_v2` oluştur, yeni mapping ile. (4) `_reindex` API: `products_v1` → `products_v2` (arka planda). (5) Alias switch: `products` → `products_v2`. (6) `products_v1`'i sil. Uygulama hiç değişmedi, downtime yok. Index Template + ILM (Index Lifecycle Management): Log index'leri otomatik rotate et, yaşlı index'leri hot → warm → cold → delete.
 
 ---
 
